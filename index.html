@@ -113,6 +113,12 @@
               <span class="sidebar-label">Settings</span>
             </a>
           </li>
+          <li class="nav-item">
+            <a href="login.html" id="logout-link" class="nav-link d-flex align-items-center gap-3 py-2 px-3 rounded-3 text-secondary" onclick="['sessionStorage','localStorage'].forEach(function(t){try{window[t].removeItem('cartkaro_logged_in');window[t].removeItem('cartkaro_user');}catch(e){}}); window.location.replace('login.html'); return false;">
+              <i class="bi bi-box-arrow-right fs-5"></i>
+              <span class="sidebar-label">Logout</span>
+            </a>
+          </li>
         </ul>
       </nav>
 
