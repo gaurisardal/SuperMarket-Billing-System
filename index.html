@@ -113,6 +113,12 @@
               <span class="sidebar-label">Settings</span>
             </a>
           </li>
+          <li class="nav-item">
+            <a href="login.html" id="logout-link" class="nav-link d-flex align-items-center gap-3 py-2 px-3 rounded-3 text-secondary" onclick="['sessionStorage','localStorage'].forEach(function(t){try{window[t].removeItem('cartkaro_logged_in');window[t].removeItem('cartkaro_user');}catch(e){}}); window.location.replace('login.html'); return false;">
+              <i class="bi bi-box-arrow-right fs-5"></i>
+              <span class="sidebar-label">Logout</span>
+            </a>
+          </li>
         </ul>
       </nav>
 
@@ -194,6 +200,12 @@
           <button class="btn btn-outline-primary btn-sm d-flex align-items-center gap-1 nav-link-btn" data-target="scanner" title="Scan Barcode">
             <i class="bi bi-upc-scan"></i>
             <span class="d-none d-sm-inline">Scan</span>
+          </button>
+
+          <!-- Supabase Connection & Staff Login Badge -->
+          <button class="btn btn-sm btn-outline-primary border d-flex align-items-center gap-1" id="supabase-status-badge" data-bs-toggle="modal" data-bs-target="#supabase-auth-modal" title="Supabase Database Status & Staff Login">
+            <i class="bi bi-database text-primary" id="supabase-status-icon"></i>
+            <span class="d-none d-md-inline small fw-semibold" id="supabase-status-text">Supabase: Online</span>
           </button>
 
           <!-- Store Status Badge -->
@@ -474,6 +486,20 @@
                     <i class="bi bi-plus-lg"></i> Add New Product
                   </button>
                 </div>
+              </div>
+
+              <!-- Live Supabase Status Alert Banner -->
+              <div id="supabase-products-alert" class="alert alert-info py-2 px-3 mt-3 mb-0 d-flex align-items-center justify-content-between small d-none">
+                <div class="d-flex align-items-center gap-2">
+                  <i class="bi bi-database-check fs-5 text-primary"></i>
+                  <div>
+                    <strong id="supabase-products-alert-title">Live Supabase Database:</strong>
+                    <span id="supabase-products-alert-text">Syncing with remote database...</span>
+                  </div>
+                </div>
+                <button class="btn btn-sm btn-outline-primary py-0 px-2" data-bs-toggle="modal" data-bs-target="#supabase-auth-modal">
+                  <i class="bi bi-key me-1"></i> Staff Auth & Status
+                </button>
               </div>
 
               <!-- Search and Filter Bar -->
@@ -1755,6 +1781,64 @@
     </div>
   </div>
 
+  <!-- 5. SUPABASE CONNECTION & STAFF LOGIN MODAL -->
+  <div class="modal fade" id="supabase-auth-modal" tabindex="-1" aria-labelledby="supabaseAuthModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content border-0 shadow">
+        <div class="modal-header bg-dark text-white p-3">
+          <h6 class="modal-title fw-bold" id="supabaseAuthModalLabel">
+            <i class="bi bi-database me-2 text-primary"></i> Supabase Database & Staff Access
+          </h6>
+          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body p-4">
+          <!-- Connection Status Card -->
+          <div class="p-3 bg-light rounded-3 border mb-3">
+            <div class="d-flex align-items-center justify-content-between mb-1">
+              <span class="small text-muted fw-bold text-uppercase">Supabase Endpoint:</span>
+              <span class="badge bg-success-subtle text-success border border-success-subtle" id="modal-sb-ping-badge">Connected</span>
+            </div>
+            <code class="d-block small text-break text-dark bg-white p-2 border rounded" id="modal-sb-url">https://ywobsbogfesnvsgqbhej.supabase.co</code>
+            <div class="mt-2 small text-muted d-flex justify-content-between align-items-center">
+              <span>Auth Role: <strong id="modal-sb-session-status" class="text-secondary">Unauthenticated (Guest)</strong></span>
+              <button class="btn btn-link btn-sm p-0 text-decoration-none" id="btn-test-sb-connection"><i class="bi bi-arrow-clockwise me-1"></i>Test Live Query</button>
+            </div>
+          </div>
+
+          <!-- RLS Notice -->
+          <div class="alert alert-warning p-2 small mb-3">
+            <i class="bi bi-shield-lock me-1 fw-bold"></i>
+            <strong>Row Level Security (RLS) is Active:</strong> In this schema, all tables require an <code>authenticated</code> staff login. As an unauthenticated guest, live queries return 0 rows.
+          </div>
+
+          <!-- Staff Login Form -->
+          <form id="supabase-login-form">
+            <h6 class="fw-bold text-dark mb-2 small text-uppercase">Staff Sign In (Supabase Auth)</h6>
+            <div class="mb-2">
+              <label for="sb-login-email" class="form-label small mb-1">Staff Email</label>
+              <input type="email" id="sb-login-email" class="form-control form-control-sm" placeholder="staff@example.com" autocomplete="username">
+            </div>
+            <div class="mb-3">
+              <label for="sb-login-password" class="form-label small mb-1">Password</label>
+              <input type="password" id="sb-login-password" class="form-control form-control-sm" placeholder="••••••••" autocomplete="current-password">
+            </div>
+            <div class="d-flex gap-2">
+              <button type="submit" class="btn btn-primary btn-sm flex-grow-1 fw-semibold" id="btn-sb-login">
+                <i class="bi bi-box-arrow-in-right me-1"></i> Sign In as Staff
+              </button>
+              <button type="button" class="btn btn-outline-danger btn-sm d-none" id="btn-sb-logout">
+                <i class="bi bi-box-arrow-right me-1"></i> Logout
+              </button>
+            </div>
+          </form>
+
+          <!-- Test Output Log Box -->
+          <div id="sb-query-test-output" class="mt-3 p-2 bg-dark text-light font-monospace small rounded d-none" style="max-height: 140px; overflow-y: auto; font-size: 0.75rem;"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Toast Notification Container -->
   <div class="toast-container position-fixed bottom-0 end-0 p-3" style="z-index: 1090;">
     <div id="live-toast" class="toast align-items-center text-white bg-dark border-0 shadow" role="alert" aria-live="assertive" aria-atomic="true">
@@ -1773,6 +1857,9 @@
   
   <!-- Chart.js 4.4.2 -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+  <!-- Supabase JS Client v2 -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 
   <!-- Core Application Logic -->

@@ -1,34 +1,3 @@
-// =====================================
-// SUPABASE CONNECTION
-// =====================================
-
-const SUPABASE_URL = "https://ywobsbogfesnvsgqbhej.supabase.co";
-const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_D-yGBoQjEl8mllO31ebrJw_ZU6yJCZo";
-
-const supabaseClient = window.supabase.createClient(
-    SUPABASE_URL,
-    SUPABASE_PUBLISHABLE_KEY
-);
-
-// Test the connection by querying the products table
-async function testSupabaseConnection() {
-    console.log("Testing Supabase connection...");
-
-    const { data, error } = await supabaseClient
-        .from("products")
-        .select("*")
-        .limit(5);
-
-    if (error) {
-        console.error("Supabase query failed:", error.message);
-        return;
-    }
-
-    console.log("Supabase query successful!");
-    console.log("Products retrieved:", data);
-}
-
-testSupabaseConnection();
 /**
  * CartKaro - Supermarket Inventory & Billing Management System
  * Pure Vanilla JavaScript Client-Side Application
@@ -363,8 +332,305 @@ const CartKaroStore = {
 CartKaroStore.initSeedData();
 
 // ==========================================================================
-// 3. UI STATE & HELPERS
+// 2B. SUPABASE DATABASE & AUTH SERVICE
 // ==========================================================================
+// HTML-escape helper (was missing: caused "esc is not defined" and broke auth state)
+function esc(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+const SUPABASE_CONFIG = {
+  url: 'https://rtmnreoauuorytrirvrk.supabase.co',
+  key: 'sb_publishable_rFm--nvmPVFJosZKJBHOIQ_G-gkieov'
+};
+
+const SupabaseService = {
+  client: null,
+  isConnected: false,
+  isAuthenticated: false,
+  currentUser: null,
+  lastRlsStatus: null, // null | 'ok' | 'restricted' | 'error'
+  lastError: null,
+
+  init() {
+    if (typeof window !== 'undefined' && window.supabase && window.supabase.createClient) {
+      try {
+        this.client = window.supabase.createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.key, {
+          auth: {
+            persistSession: true,
+            autoRefreshToken: true
+          }
+        });
+        this.isConnected = true;
+        this.checkAuth();
+      } catch (err) {
+        console.error('Failed to initialize Supabase client:', err);
+        this.isConnected = false;
+        this.lastError = err;
+      }
+    } else {
+      console.warn('Supabase JS SDK not loaded yet.');
+    }
+  },
+
+  async checkAuth() {
+    if (!this.client) return null;
+    try {
+      const { data } = await this.client.auth.getSession();
+      if (data && data.session && data.session.user) {
+        this.isAuthenticated = true;
+        this.currentUser = data.session.user;
+      } else {
+        this.isAuthenticated = false;
+        this.currentUser = null;
+      }
+      this.updateStatusBadge();
+      return this.currentUser;
+    } catch (e) {
+      this.isAuthenticated = false;
+      return null;
+    }
+  },
+
+  updateStatusBadge() {
+    const badge = document.getElementById('supabase-status-badge');
+    const textEl = document.getElementById('supabase-status-text');
+    const iconEl = document.getElementById('supabase-status-icon');
+    const sessionStatusEl = document.getElementById('modal-sb-session-status');
+    const logoutBtn = document.getElementById('btn-sb-logout');
+    const loginBtn = document.getElementById('btn-sb-login');
+
+    if (!badge || !textEl) return;
+
+    if (this.isAuthenticated && this.currentUser) {
+      badge.className = 'btn btn-sm btn-outline-success border d-flex align-items-center gap-1';
+      textEl.textContent = `Staff: ${this.currentUser.email.split('@')[0]}`;
+      if (iconEl) iconEl.className = 'bi bi-person-check-fill text-success';
+      if (sessionStatusEl) sessionStatusEl.innerHTML = `<span class="text-success fw-bold">Staff Authenticated</span> (${esc(this.currentUser.email)})`;
+      if (logoutBtn) logoutBtn.classList.remove('d-none');
+      if (loginBtn) loginBtn.classList.add('d-none');
+    } else if (this.isConnected) {
+      badge.className = 'btn btn-sm btn-outline-primary border d-flex align-items-center gap-1';
+      textEl.textContent = 'Supabase: Connected';
+      if (iconEl) iconEl.className = 'bi bi-database text-primary';
+      if (sessionStatusEl) sessionStatusEl.innerHTML = '<span class="text-warning fw-bold">Unauthenticated (Guest)</span>';
+      if (logoutBtn) logoutBtn.classList.add('d-none');
+      if (loginBtn) loginBtn.classList.remove('d-none');
+    } else {
+      badge.className = 'btn btn-sm btn-outline-secondary border d-flex align-items-center gap-1';
+      textEl.textContent = 'Supabase: Offline';
+      if (iconEl) iconEl.className = 'bi bi-database-slash text-muted';
+      if (sessionStatusEl) sessionStatusEl.textContent = 'Disconnected';
+      if (logoutBtn) logoutBtn.classList.add('d-none');
+      if (loginBtn) loginBtn.classList.remove('d-none');
+    }
+  },
+
+  /**
+   * Safe Read-Only Product Fetching
+   * Queries products table with join on inventory table
+   */
+  async fetchProducts() {
+    if (!this.client) {
+      return { error: { message: 'Supabase client not initialized' } };
+    }
+
+    try {
+      const { data, error, status } = await this.client
+        .from('products')
+        .select('product_id, product_name, barcode, category, price, tax_rate, unit, inventory(quantity, reorder_level, last_updated)')
+        .order('product_id', { ascending: true });
+
+      if (error) {
+        this.lastRlsStatus = 'error';
+        this.lastError = error;
+        return { error };
+      }
+
+      if (!data || data.length === 0) {
+        const session = await this.checkAuth();
+        this.lastRlsStatus = session ? 'empty_table' : 'restricted';
+        return { data: [], isRlsRestricted: !session };
+      }
+
+      this.lastRlsStatus = 'ok';
+
+      // Map Supabase columns to frontend JavaScript product model
+      const mapped = data.map(p => {
+        const inv = Array.isArray(p.inventory) ? p.inventory[0] : p.inventory;
+        const sellingPrice = parseFloat(p.price || 0);
+        return {
+          id: 'PRD-' + p.product_id,
+          dbId: p.product_id,
+          name: p.product_name,
+          barcode: p.barcode || ('890103' + String(p.product_id).padStart(7, '0')),
+          category: p.category,
+          sellingPrice: sellingPrice,
+          costPrice: parseFloat((sellingPrice * 0.8).toFixed(2)),
+          taxRate: parseFloat(p.tax_rate || 0),
+          unit: p.unit || 'pack',
+          quantity: inv ? parseFloat(inv.quantity || 0) : 0,
+          minStock: inv ? parseFloat(inv.reorder_level || 10) : 10,
+          supplier: 'Supermarket Inventory',
+          expiryDate: '',
+          fromSupabase: true
+        };
+      });
+
+      return { data: mapped, isRlsRestricted: false };
+    } catch (err) {
+      console.error('Supabase fetch exception:', err);
+      this.lastRlsStatus = 'error';
+      this.lastError = err;
+      return { error: err };
+    }
+  },
+
+  /* ---------- WRITE OPERATIONS (INSERT / UPDATE / DELETE) ---------- */
+  // RLS policy "staff_all_*" only allows the `authenticated` role to write,
+  // so every write needs a logged-in staff session.
+  canWrite() {
+    return !!(this.client && this.isAuthenticated);
+  },
+
+  // Live check: re-reads the Supabase session instead of trusting a flag set at page load
+  async ensureAuth() {
+    if (!this.client) {
+      console.warn('[CartKaro] Supabase client is null - SDK script not loaded?');
+      return false;
+    }
+    const user = await this.checkAuth();
+    if (!user) console.warn('[CartKaro] No active Supabase session. Sign in via Staff Auth & Status.');
+    return !!user;
+  },
+
+  async insertProduct(p) {
+    // product_id is "generated always as identity" -> never send it
+    const { data, error } = await this.client
+      .from('products')
+      .insert({
+        product_name: p.name,
+        barcode: p.barcode,
+        category: p.category,
+        price: p.sellingPrice,
+        tax_rate: p.taxRate || 0,
+        unit: p.unit || 'pack'
+      })
+      .select('product_id')
+      .single();
+    if (error) return { error };
+
+    const { error: invErr } = await this.client
+      .from('inventory')
+      .insert({ product_id: data.product_id, quantity: p.quantity, reorder_level: p.minStock });
+    if (invErr) {
+      // roll back the half-created product so the tables stay consistent
+      await this.client.from('products').delete().eq('product_id', data.product_id);
+      return { error: invErr };
+    }
+
+    if (p.quantity > 0) {
+      await this.client.from('stock_transactions').insert({
+        product_id: data.product_id,
+        transaction_type: 'PURCHASE',
+        quantity_change: p.quantity,
+        reference_id: 'NEW-PRODUCT'
+      });
+    }
+    return { data };
+  },
+
+  async updateProduct(dbId, p, prevQty) {
+    const { data, error } = await this.client
+      .from('products')
+      .update({
+        product_name: p.name,
+        barcode: p.barcode,
+        category: p.category,
+        price: p.sellingPrice
+      })
+      .eq('product_id', dbId)
+      .select('product_id');
+    if (error) return { error };
+    if (!data || data.length === 0) {
+      return { error: { message: 'No row updated (blocked by RLS or product no longer exists).' } };
+    }
+
+    const { error: invErr } = await this.client
+      .from('inventory')
+      .upsert(
+        { product_id: dbId, quantity: p.quantity, reorder_level: p.minStock, last_updated: new Date().toISOString() },
+        { onConflict: 'product_id' }
+      );
+    if (invErr) return { error: invErr };
+
+    if (p.quantity !== prevQty) {
+      await this.client.from('stock_transactions').insert({
+        product_id: dbId,
+        transaction_type: 'ADJUSTMENT',
+        quantity_change: p.quantity - prevQty,
+        reference_id: 'MANUAL-EDIT'
+      });
+    }
+    return { data };
+  },
+
+  async deleteProduct(dbId) {
+    // bill_items.product_id has no ON DELETE CASCADE -> sold products must be kept
+    const { count, error: cErr } = await this.client
+      .from('bill_items')
+      .select('bill_item_id', { count: 'exact', head: true })
+      .eq('product_id', dbId);
+    if (cErr) return { error: cErr };
+    if (count > 0) {
+      return { error: { message: `This product appears on ${count} bill line(s), so it cannot be deleted. Set its stock to 0 instead.` } };
+    }
+
+    // stock_transactions also has no cascade -> clear this product's history first
+    const { error: stErr } = await this.client.from('stock_transactions').delete().eq('product_id', dbId);
+    if (stErr) return { error: stErr };
+
+    // inventory row is removed automatically (ON DELETE CASCADE)
+    const { data, error } = await this.client
+      .from('products')
+      .delete()
+      .eq('product_id', dbId)
+      .select('product_id');
+    if (error) return { error };
+    if (!data || data.length === 0) {
+      return { error: { message: 'No row deleted (blocked by RLS or product no longer exists).' } };
+    }
+    return { data };
+  },
+
+  async signIn(email, password) {
+    if (!this.client) return { error: { message: 'Supabase client not initialized' } };
+    try {
+      const res = await this.client.auth.signInWithPassword({ email, password });
+      if (res.data?.session) {
+        this.isAuthenticated = true;
+        this.currentUser = res.data.session.user;
+        this.updateStatusBadge();
+      }
+      return res;
+    } catch (err) {
+      return { error: err };
+    }
+  },
+
+  async signOut() {
+    if (!this.client) return;
+    await this.client.auth.signOut();
+    this.isAuthenticated = false;
+    this.currentUser = null;
+    this.updateStatusBadge();
+  }
+};
 const AppState = {
   currentView: 'dashboard',
   cart: [],
@@ -905,6 +1171,29 @@ function renderProducts() {
   const settings = CartKaroStore.getSettings();
   const threshold = settings.lowStockThreshold || 10;
 
+  // Update Live Supabase Status Alert Banner
+  const alertEl = document.getElementById('supabase-products-alert');
+  const alertTitle = document.getElementById('supabase-products-alert-title');
+  const alertText = document.getElementById('supabase-products-alert-text');
+  if (alertEl && alertTitle && alertText) {
+    alertEl.classList.remove('d-none');
+    if (SupabaseService.isAuthenticated && SupabaseService.currentUser) {
+      alertEl.className = 'alert alert-success py-2 px-3 mt-3 mb-0 d-flex align-items-center justify-content-between small';
+      alertTitle.textContent = 'Supabase Authenticated:';
+      alertText.textContent = ` Logged in as ${SupabaseService.currentUser.email}. Live database products active.`;
+    } else if (SupabaseService.lastRlsStatus === 'restricted') {
+      alertEl.className = 'alert alert-warning py-2 px-3 mt-3 mb-0 d-flex align-items-center justify-content-between small';
+      alertTitle.textContent = 'Supabase RLS Active:';
+      alertText.textContent = ' Row Level Security restricts guest reads (0 rows returned). Displaying local fallback data. Log in as staff to view database records.';
+    } else if (SupabaseService.isConnected) {
+      alertEl.className = 'alert alert-info py-2 px-3 mt-3 mb-0 d-flex align-items-center justify-content-between small';
+      alertTitle.textContent = 'Supabase Connected:';
+      alertText.textContent = ` Endpoint ${new URL(SUPABASE_CONFIG.url).host} is active.`;
+    } else {
+      alertEl.classList.add('d-none');
+    }
+  }
+
   // Populate Category Filter dropdown if empty
   const catSelect = document.getElementById('prod-category-filter');
   if (catSelect && catSelect.children.length <= 1) {
@@ -1093,11 +1382,29 @@ function openProductModal(mode = 'add', prodId = null) {
   modal.show();
 }
 
-function handleProductFormSubmit(e) {
+async function refreshProductsFromSupabase() {
+  const res = await SupabaseService.fetchProducts();
+  if (res.data && !res.isRlsRestricted) {
+    CartKaroStore.saveProducts(res.data);
+  }
+  renderProducts();
+  updateStockAlertsBadge();
+}
+
+let productSaveInFlight = false;
+
+async function handleProductFormSubmit(e) {
   e.preventDefault();
+  if (productSaveInFlight) return;
   const form = document.getElementById('product-form');
   if (!form.checkValidity()) {
     form.classList.add('was-validated');
+    SoundFx.alertTone();
+    return;
+  }
+
+  if (!(await SupabaseService.ensureAuth())) {
+    showToast('Sign in as staff (top bar > Staff Auth) to save changes to the database.', true);
     SoundFx.alertTone();
     return;
   }
@@ -1107,86 +1414,88 @@ function handleProductFormSubmit(e) {
   const barcode = document.getElementById('prod-barcode').value.trim();
   const name = document.getElementById('prod-name').value.trim();
   const category = document.getElementById('prod-category').value.trim();
-  const costPrice = parseFloat(document.getElementById('prod-cost').value);
   const sellingPrice = parseFloat(document.getElementById('prod-price').value);
   const quantity = parseInt(document.getElementById('prod-qty').value, 10);
   const minStock = parseInt(document.getElementById('prod-min-stock').value, 10) || 10;
-  const supplier = document.getElementById('prod-supplier').value.trim();
-  const expiryDate = document.getElementById('prod-expiry').value;
 
   const products = CartKaroStore.getProducts();
+  productSaveInFlight = true;
 
-  // Validate duplicate ID and Barcode
-  if (mode === 'add') {
-    if (products.some(p => p.id.toLowerCase() === id.toLowerCase())) {
-      showToast(`Product ID "${id}" is already used!`, true);
-      SoundFx.alertTone();
-      return;
-    }
-    if (products.some(p => p.barcode === barcode)) {
-      showToast(`Barcode "${barcode}" is already registered to another product!`, true);
-      SoundFx.alertTone();
-      return;
-    }
+  try {
+    if (mode === 'add') {
+      if (products.some(p => p.barcode === barcode)) {
+        showToast(`Barcode "${barcode}" is already registered to another product!`, true);
+        SoundFx.alertTone();
+        return;
+      }
 
-    const newProduct = {
-      id, barcode, name, category, costPrice, sellingPrice, quantity, minStock, supplier, expiryDate,
-      createdAt: new Date().toISOString()
-    };
-    products.push(newProduct);
-    CartKaroStore.saveProducts(products);
-    CartKaroStore.logMovement({
-      productId: id,
-      productName: name,
-      barcode: barcode,
-      type: 'STOCK_IN',
-      quantity: quantity,
-      previousStock: 0,
-      newStock: quantity,
-      reason: 'New Product Registration'
-    });
-    showToast(`Product "${name}" added successfully!`);
-    SoundFx.successChime();
-  } else {
-    // Edit mode
-    const index = products.findIndex(p => p.id === id);
-    if (index === -1) return;
+      const taxRate = CartKaroStore.getSettings().defaultGst || 0;
+      const res = await SupabaseService.insertProduct({ name, barcode, category, sellingPrice, taxRate, quantity, minStock });
+      if (res.error) {
+        console.error('Insert failed:', res.error);
+        showToast(`Insert failed: ${res.error.message}`, true);
+        SoundFx.alertTone();
+        return;
+      }
 
-    // Check duplicate barcode with other products
-    if (products.some(p => p.id !== id && p.barcode === barcode)) {
-      showToast(`Barcode "${barcode}" is already used by another product!`, true);
-      SoundFx.alertTone();
-      return;
-    }
-
-    const prevQty = products[index].quantity;
-    products[index] = {
-      ...products[index],
-      barcode, name, category, costPrice, sellingPrice, quantity, minStock, supplier, expiryDate,
-      updatedAt: new Date().toISOString()
-    };
-    CartKaroStore.saveProducts(products);
-
-    if (prevQty !== quantity) {
       CartKaroStore.logMovement({
-        productId: id,
+        productId: 'PRD-' + res.data.product_id,
         productName: name,
-        barcode: barcode,
-        type: quantity > prevQty ? 'STOCK_IN' : 'STOCK_OUT',
-        quantity: Math.abs(quantity - prevQty),
-        previousStock: prevQty,
+        barcode,
+        type: 'STOCK_IN',
+        quantity,
+        previousStock: 0,
         newStock: quantity,
-        reason: 'Manual Stock Count Edit via Product Update'
+        reason: 'New Product Registration'
       });
+      showToast(`Product "${name}" added to database!`);
+      SoundFx.successChime();
+    } else {
+      const existing = products.find(p => p.id === id);
+      if (!existing) return;
+      if (!existing.dbId) {
+        showToast('This product exists only in local storage. Sign in and re-sync first.', true);
+        return;
+      }
+      if (products.some(p => p.id !== id && p.barcode === barcode)) {
+        showToast(`Barcode "${barcode}" is already used by another product!`, true);
+        SoundFx.alertTone();
+        return;
+      }
+
+      const prevQty = existing.quantity;
+      const res = await SupabaseService.updateProduct(existing.dbId, { name, barcode, category, sellingPrice, quantity, minStock }, prevQty);
+      if (res.error) {
+        console.error('Update failed:', res.error);
+        showToast(`Update failed: ${res.error.message}`, true);
+        SoundFx.alertTone();
+        return;
+      }
+
+      if (prevQty !== quantity) {
+        CartKaroStore.logMovement({
+          productId: id,
+          productName: name,
+          barcode,
+          type: quantity > prevQty ? 'STOCK_IN' : 'STOCK_OUT',
+          quantity: Math.abs(quantity - prevQty),
+          previousStock: prevQty,
+          newStock: quantity,
+          reason: 'Manual Stock Count Edit via Product Update'
+        });
+      }
+      showToast(`Product "${name}" updated in database!`);
+      SoundFx.beep(900, 0.1);
     }
 
-    showToast(`Product "${name}" updated successfully!`);
-    SoundFx.beep(900, 0.1);
+    bootstrap.Modal.getInstance(document.getElementById('product-modal')).hide();
+    await refreshProductsFromSupabase();
+  } catch (err) {
+    console.error('Product save exception:', err);
+    showToast(`Unexpected error: ${err.message || err}`, true);
+  } finally {
+    productSaveInFlight = false;
   }
-
-  bootstrap.Modal.getInstance(document.getElementById('product-modal')).hide();
-  renderProducts();
-  updateStockAlertsBadge();
 }
 
 function deleteProduct(prodId) {
@@ -1196,10 +1505,26 @@ function deleteProduct(prodId) {
 
   openConfirmModal({
     title: 'Delete Product?',
-    message: `Are you sure you want to delete "${product.name}" (${product.id})? This will permanently remove it from catalog.`,
-    onConfirm: () => {
-      const updated = products.filter(p => p.id !== prodId);
-      CartKaroStore.saveProducts(updated);
+    message: `Are you sure you want to delete "${product.name}" (${product.id})? This will permanently remove it from the database.`,
+    onConfirm: async () => {
+      if (!(await SupabaseService.ensureAuth())) {
+        showToast('Sign in as staff (top bar > Staff Auth) to delete from the database.', true);
+        SoundFx.alertTone();
+        return;
+      }
+      if (!product.dbId) {
+        showToast('This product exists only in local storage. Sign in and re-sync first.', true);
+        return;
+      }
+
+      const res = await SupabaseService.deleteProduct(product.dbId);
+      if (res.error) {
+        console.error('Delete failed:', res.error);
+        showToast(`Delete failed: ${res.error.message}`, true);
+        SoundFx.alertTone();
+        return;
+      }
+
       CartKaroStore.logMovement({
         productId: product.id,
         productName: product.name,
@@ -1211,8 +1536,7 @@ function deleteProduct(prodId) {
         reason: 'Product Deletion from Catalog'
       });
       showToast(`Product "${product.name}" deleted.`);
-      renderProducts();
-      updateStockAlertsBadge();
+      await refreshProductsFromSupabase();
     }
   });
 }
@@ -3066,6 +3390,76 @@ document.addEventListener('DOMContentLoaded', () => {
       });
     });
   }
+
+  // 13. Supabase Client Initialization & Event Handlers
+  SupabaseService.init();
+
+  const testSbBtn = document.getElementById('btn-test-sb-connection');
+  const sbTestOutput = document.getElementById('sb-query-test-output');
+  if (testSbBtn && sbTestOutput) {
+    testSbBtn.addEventListener('click', async () => {
+      sbTestOutput.classList.remove('d-none');
+      sbTestOutput.innerHTML = '<span class="text-info"><i class="bi bi-hourglass-split"></i> Querying public.products from Supabase...</span>';
+      
+      const res = await SupabaseService.fetchProducts();
+      if (res.error) {
+        sbTestOutput.innerHTML = `<span class="text-danger">Query Error:</span>\n${esc(JSON.stringify(res.error, null, 2))}`;
+      } else if (res.isRlsRestricted) {
+        sbTestOutput.innerHTML = `<span class="text-warning">RLS Restriction Detected:</span>\nQuery executed successfully (HTTP 200), but PostgreSQL Row Level Security returned 0 rows because the policy 'staff_all_products' requires an authenticated staff user.\n\nTo view real database rows:\n1) Sign in with a staff email & password below\n2) Or run in Supabase SQL editor:\n   CREATE POLICY "anon_read" ON public.products FOR SELECT TO anon USING (true);`;
+      } else {
+        sbTestOutput.innerHTML = `<span class="text-success">Success! Found ${res.data.length} products in Supabase:</span>\n${esc(JSON.stringify(res.data.slice(0, 3), null, 2))}`;
+      }
+    });
+  }
+
+  const sbLoginForm = document.getElementById('supabase-login-form');
+  if (sbLoginForm) {
+    sbLoginForm.addEventListener('submit', async e => {
+      e.preventDefault();
+      const email = document.getElementById('sb-login-email').value.trim();
+      const password = document.getElementById('sb-login-password').value;
+
+      if (!email || !password) {
+        showToast('Please enter staff email and password', true);
+        return;
+      }
+
+      showToast('Authenticating with Supabase...');
+      const res = await SupabaseService.signIn(email, password);
+      if (res.error) {
+        showToast(`Login failed: ${res.error.message}`, true);
+        SoundFx.alertTone();
+      } else {
+        showToast(`Signed in successfully as ${email}!`);
+        SoundFx.successChime();
+        syncSupabaseData();
+      }
+    });
+  }
+
+  const sbLogoutBtn = document.getElementById('btn-sb-logout');
+  if (sbLogoutBtn) {
+    sbLogoutBtn.addEventListener('click', async () => {
+      await SupabaseService.signOut();
+      showToast('Logged out from staff session.');
+      renderProducts();
+    });
+  }
+
+  // Initial Sync from Supabase (Read-only)
+  async function syncSupabaseData() {
+    const res = await SupabaseService.fetchProducts();
+    if (res.data && res.data.length > 0) {
+      CartKaroStore.saveProducts(res.data);
+      renderView(AppState.currentView);
+      updateStockAlertsBadge();
+      showToast(`Loaded ${res.data.length} products from Supabase database!`);
+    } else {
+      renderProducts();
+    }
+  }
+
+  syncSupabaseData();
 
   // Initial Load: Route to hash or dashboard
   const initialHash = window.location.hash.replace('#', '') || 'dashboard';
