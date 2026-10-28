@@ -1,3 +1,34 @@
+// =====================================
+// SUPABASE CONNECTION
+// =====================================
+
+const SUPABASE_URL = "https://ywobsbogfesnvsgqbhej.supabase.co";
+const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_D-yGBoQjEl8mllO31ebrJw_ZU6yJCZo";
+
+const supabaseClient = window.supabase.createClient(
+    SUPABASE_URL,
+    SUPABASE_PUBLISHABLE_KEY
+);
+
+// Test the connection by querying the products table
+async function testSupabaseConnection() {
+    console.log("Testing Supabase connection...");
+
+    const { data, error } = await supabaseClient
+        .from("products")
+        .select("*")
+        .limit(5);
+
+    if (error) {
+        console.error("Supabase query failed:", error.message);
+        return;
+    }
+
+    console.log("Supabase query successful!");
+    console.log("Products retrieved:", data);
+}
+
+testSupabaseConnection();
 /**
  * CartKaro - Supermarket Inventory & Billing Management System
  * Pure Vanilla JavaScript Client-Side Application
